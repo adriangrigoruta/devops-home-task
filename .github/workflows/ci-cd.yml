@@ -3,19 +3,25 @@ name: CI/CD Pipeline
 on:
   push:
     branches: [ main ]
+    paths:
+      - app/**
   pull_request:
     branches: [ main ]
+    paths:
+      - app/**
 
 env:
   REGISTRY: ghcr.io
+  CHART: user-management-api
   IMAGE_NAME: ${{ github.repository_owner }}/${{ github.event.repository.name }}
   DOCKER_BUILDKIT: 1
   DATABASE_URL: postgresql://postgres:postgres@localhost:5432/users_test
-  AWS_DEFAULT_REGION: us-east-1
+  AWS_DEFAULT_REGION: eu-west-2
   AWS_ACCESS_KEY_ID: test
   AWS_SECRET_ACCESS_KEY: test
   S3_BUCKET_NAME: user-queries
   PYTHONPATH: ${{ github.workspace }}
+  CLUSTER_NAME: galactic-eks
 
 jobs:
   test-docker:
@@ -196,3 +202,24 @@ jobs:
         tags: ${{ env.REGISTRY }}/${{ env.LOWERCASE_IMAGE_NAME }}:latest
         cache-from: type=gha
         cache-to: type=gha,mode=max
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v1
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{env.AWS_DEFAULT_REGION}}
+
+    - name: Update kube config
+      run: aws eks update-kubeconfig --name $CLUSTER_NAME --region $AWS_DEFAULT_REGION
+
+    - name: Deploy Helm Chart To Amazon EKS Cluster
+      run: |
+        helm install ${{ env.CHART }} charts/${{ env.CHART }} --set containers.image=${{ env.REGISTRY }}/${{ env.LOWERCASE_IMAGE_NAME }}:latest
+
+    - name: Notify on failure
+      if: failure()
+      run: |
+        curl -X POST -H 'Content-type: application/json' \
+          --data '{"text":"🚨 Deployment failed in GitHub Actions for `${{ github.repository }}` on `${{ github.ref }}`."}' \
+          $SLACK_WEBHOOK_URL
